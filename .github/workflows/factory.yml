@@ -1,12 +1,14 @@
-# Copy this file into each app repo as .github/workflows/factory.yml
-# and it already points at kverburg/factory.
+# Factory: builds Linear tickets and reviews PRs. Managed from kverburg/factory
+# (templates/app-repo/.github/workflows/factory.yml).
 name: Factory
 
 on:
-  # Sent by the relay when a Linear issue moves to "Agent Ready".
   repository_dispatch:
-    types: [factory-build]
-  # PRs you open yourself get the same review.
+    # factory-build: sent by the relay when a Linear issue moves to "Agent Ready".
+    # factory-fix:   sent by the reviewer when it wants the builder to fix its PR.
+    types: [factory-build, factory-fix]
+  # PRs you open yourself get the same review (but are never changed automatically).
+  # The factory's own PRs (label agent-built) are already reviewed by the build run.
   pull_request:
     types: [opened, reopened, ready_for_review]
 
@@ -31,9 +33,11 @@ jobs:
     needs: build
     if: >-
       always() &&
-      ((github.event_name == 'pull_request' && !github.event.pull_request.draft) ||
+      ((github.event_name == 'pull_request' && !github.event.pull_request.draft &&
+        !contains(github.event.pull_request.labels.*.name, 'agent-built')) ||
        needs.build.outputs.pr_number != '')
     uses: kverburg/factory/.github/workflows/review.yml@main
     with:
       pr_number: ${{ needs.build.outputs.pr_number || github.event.pull_request.number }}
+      fix_round: ${{ github.event.client_payload.round || '0' }}
     secrets: inherit
