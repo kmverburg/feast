@@ -237,14 +237,14 @@ async function handleFeedback(url, req, env, ctx) {
     return json({ ok: true, id: p.id });
   }
   if (url.pathname === '/api/feedback/comment') {
-    const p = await addComment(env, body && body.id, body && body.comment);
+    const p = await addComment(env, body && body.id, body && body.comment, { log });
     if (!p) return json({ error: 'rejected' }, 400);
     await enqueueFeedback(env, p.id);
     kick();
     return json({ ok: true });
   }
   if (url.pathname === '/api/feedback/decide') {
-    return (await decide(env, body && body.id, body && body.decision)) ? json({ ok: true }) : json({ error: 'rejected' }, 400);
+    return (await decide(env, body && body.id, body && body.decision, { log })) ? json({ ok: true }) : json({ error: 'rejected' }, 400);
   }
   return new Response('Not found', { status: 404 });
 }

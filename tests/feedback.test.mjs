@@ -150,3 +150,66 @@ test('a proposal without ingredients or steps is rejected', () => {
   assert.throws(() => parseFeedbackResponse(answer({ summary: 'x', instructions: [{ text: '' }] }), baseOf(recipe)), /no steps/);
   assert.throws(() => parseFeedbackResponse(answer({ changes: [] }), baseOf(recipe)), /explanation/);
 });
+
+const events = (lines, name) => lines.filter((l) => l.event === name);
+const collect = () => { const lines = []; return { lines, log: (level, f) => lines.push({ level, ...f }) }; };
+
+test('every step of the flow is logged; feedback text only for no-change proposals', async () => {
+  const second = answer({ summary: 'Zout weggelaten.', changes: ['Zout: weg', 'Stap 1 aangepast'], ingredientSections: [{ title: 'Basis', items: [{ amount: 800, unit: 'g', name: 'tomaten' }] }], instructions: [{ text: 'Kook 20 minuten.', timerMinutes: 20 }] });
+  const { env } = await setup([proposalAnswer, second]);
+  const { lines, log } = collect();
+  const p = await send(env, 'te zout');
+  await processWork(env, { log });
+  const [first] = events(lines, 'feedback_proposed');
+  assert.equal(first.proposalId, p.id);
+  assert.equal(first.changes, 1);
+  assert.equal(first.round, 1);
+  assert.equal(first.model, 'gemini-flash-latest');
+  assert.equal(typeof first.ms, 'number');
+  assert.equal(first.noChange, undefined);
+  assert.equal(first.feedback, undefined);
+  assert.equal(first.summary, undefined);
+
+  await addComment(env, p.id, 'geen zout', { log });
+  assert.deepEqual(events(lines, 'feedback_commented').map(({ proposalId, round }) => ({ proposalId, round })), [{ proposalId: p.id, round: 1 }]);
+  await enqueueFeedback(env, p.id);
+  await processWork(env, { log });
+  const second1 = events(lines, 'feedback_proposed')[1];
+  assert.equal(second1.round, 2);
+  assert.equal(second1.changes, 2);
+
+  await decide(env, p.id, 'approve', { log });
+  const [decided] = events(lines, 'feedback_decided');
+  assert.equal(decided.proposalId, p.id);
+  assert.equal(decided.decision, 'approved');
+  assert.equal(decided.rounds, 2);
+  assert.ok(!JSON.stringify(lines.filter((l) => l.event?.startsWith('feedback_'))).includes('tomaten'));
+});
+
+test('a declined proposal is logged as declined; a no-change proposal logs the cut-down texts', async () => {
+  const long = 'x'.repeat(500);
+  const { env } = await setup([answer({ summary: long, changes: [] })]);
+  const { lines, log } = collect();
+  const p = await send(env, long);
+  await processWork(env, { log });
+  const [proposed] = events(lines, 'feedback_proposed');
+  assert.equal(proposed.noChange, true);
+  assert.equal(proposed.changes, 0);
+  assert.equal(proposed.feedback.length, 300);
+  assert.equal(proposed.summary.length, 300);
+  await decide(env, p.id, 'decline', { log });
+  assert.equal(events(lines, 'feedback_decided')[0].decision, 'declined');
+  assert.equal(events(lines, 'feedback_decided')[0].rounds, 1);
+});
+
+test('unreadable answers are logged as feedback_failed', async () => {
+  const bad = { candidates: [{ content: { parts: [{ text: 'sorry, geen JSON' }] } }] };
+  const { env } = await setup([bad]);
+  const { lines, log } = collect();
+  const p = await send(env);
+  await processWork(env, { log });
+  const [failed] = events(lines, 'feedback_failed');
+  assert.equal(failed.proposalId, p.id);
+  assert.ok(failed.reason);
+  assert.equal(events(lines, 'feedback_proposed').length, 0);
+});

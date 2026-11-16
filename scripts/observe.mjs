@@ -2,6 +2,7 @@
 // Summarises how Feast is doing, from the data the app and worker keep in Cloudflare KV:
 //   activity   - last 2000 imports / translations / AI re-parses (what was used, duration, result)
 //   clientlog  - last 1000 client events (JS errors, job failures and retries, sync conflicts)
+//   proposals  - recipe feedback proposals (only counted: status, rounds, no change; no recipe content is shown)
 // Needs `npx wrangler login` once. Read-only; it never touches recipes.
 //
 //   node scripts/observe.mjs              production
@@ -9,6 +10,7 @@
 //   node scripts/observe.mjs --days 3     only the last 3 days
 //   node scripts/observe.mjs --json       raw numbers as JSON
 import { execFileSync } from 'node:child_process';
+import { feedbackStats } from './feedbackStats.mjs';
 
 const args = process.argv.slice(2);
 const preview = args.includes('--preview');
@@ -40,6 +42,7 @@ const top = (map, n = 8) => [...map.entries()].sort((a, b) => b[1] - a[1]).slice
 const bump = (map, key, by = 1) => map.set(key, (map.get(key) || 0) + by);
 
 const activity = readKey('activity').filter((e) => new Date(e.started).getTime() >= since);
+const feedback = feedbackStats(readKey('proposals'), since);
 const events = readKey('clientlog').filter((e) => e.ts >= since);
 
 // ---- jobs ----
@@ -76,6 +79,7 @@ const summary = {
       return [k, { done: g.done, failed: g.failed, running: g.running, p50: percentile(sorted, 50), p95: percentile(sorted, 95), topErrors: top(g.errors, 3) }];
     })
   ),
+  feedback,
   clientEvents: Object.fromEntries(byType),
   topErrors: top(errors),
   versions: Object.fromEntries(versions),
@@ -96,6 +100,9 @@ for (const [group, s] of Object.entries(summary.jobs)) {
   console.log(`  ${group.padEnd(48)} ${String(s.done).padStart(4)} ok ${String(s.failed).padStart(3)} failed  ${rate.padStart(7)}  p50 ${fmtMs(s.p50)}  p95 ${fmtMs(s.p95)}`);
   for (const [err, n] of s.topErrors) console.log(`      ${n}x  ${err}`);
 }
+const pct = (x) => (x == null ? '-' : `${Math.round(x * 100)}%`);
+console.log('\nRECIPE FEEDBACK');
+console.log(`  ${feedback.proposals} proposals, approved ${pct(feedback.approvalRate)} (${feedback.approved}), declined ${pct(feedback.declineRate)} (${feedback.declined}), avg rounds ${feedback.avgRounds == null ? '-' : feedback.avgRounds.toFixed(1)}, no change ${feedback.noChange}, failed ${feedback.failed}`);
 console.log('\nCLIENT EVENTS');
 for (const [k, n] of top(byType, 12)) console.log(`  ${String(n).padStart(5)}  ${k}`);
 if (summary.topErrors.length) {

@@ -3,13 +3,14 @@
 // (see work.js) so they are made also when the app is closed. When a proposal is ready, a push notification goes out.
 import { generateContent } from './gemini.js';
 import { sendPush } from './push.js';
-import { buildFeedbackRequest, parseFeedbackResponse } from '../src/shared/feedbackTask.ts';
+import { buildFeedbackRequest, parseFeedbackResponse, hasChanges } from '../src/shared/feedbackTask.ts';
 
 const KEY = 'proposals';
 const MAX_PROPOSALS = 40;
 const MAX_TEXT = 2000;
 const MAX_ATTEMPTS = 3;
 const KEEP_FINISHED_MS = 30 * 86400000;
+const MAX_LOGGED_TEXT = 300;
 
 export async function readProposals(env) {
   try {
@@ -51,22 +52,24 @@ export async function createFeedback(env, { recipeId, recipeTitle, base, hash, f
 }
 
 /** The cook reacts to a proposal: the AI starts again with the remark. Returns the proposal, or null. */
-export async function addComment(env, id, comment) {
+export async function addComment(env, id, comment, { log = () => {} } = {}) {
   const text = clip(comment);
   const list = await readProposals(env);
   const p = list.find((x) => x.id === id);
   if (!p || !text || !['ready', 'failed'].includes(p.status)) return null;
+  const round = p.comments.length + 1; // the proposal being commented on
   p.comments.push({ text, at: Date.now() });
   p.status = 'working';
   p.attempts = 0;
   p.error = undefined;
   p.updatedAt = Date.now();
   await writeProposals(env, list);
+  log('info', { event: 'feedback_commented', proposalId: p.id, round });
   return p;
 }
 
 /** approve / decline: the app applies the change itself, this only records the decision. */
-export async function decide(env, id, decision) {
+export async function decide(env, id, decision, { log = () => {} } = {}) {
   if (!['approve', 'decline'].includes(decision)) return null;
   const list = await readProposals(env);
   const p = list.find((x) => x.id === id);
@@ -74,6 +77,7 @@ export async function decide(env, id, decision) {
   p.status = decision === 'approve' ? 'approved' : 'declined';
   p.updatedAt = Date.now();
   await writeProposals(env, list);
+  log('info', { event: 'feedback_decided', proposalId: p.id, decision: p.status, rounds: p.comments.length + 1 });
   return p;
 }
 
@@ -85,20 +89,38 @@ export async function runProposal(env, id, { log = () => {}, subject } = {}) {
   const list = await readProposals(env);
   const p = list.find((x) => x.id === id);
   if (!p || p.status !== 'working') return 'done';
+  const startedAt = Date.now();
+  let model;
+  const callLog = (level, fields) => {
+    if (fields && fields.model && fields.status === 200) model = fields.model;
+    log(level, fields);
+  };
   try {
     const previous = p.proposal && p.comments.length ? p.proposal : undefined;
     const request = buildFeedbackRequest(p.base, p.feedback, p.comments.map((c) => c.text), previous);
-    const content = parseFeedbackResponse(await generateContent(env, request, 'default', log), p.base);
+    const content = parseFeedbackResponse(await generateContent(env, request, 'default', callLog), p.base);
     p.proposal = content;
     p.status = 'ready';
     p.updatedAt = Date.now();
     await writeProposals(env, list);
+    const noChange = !hasChanges(content);
+    log('info', {
+      event: 'feedback_proposed',
+      proposalId: p.id,
+      changes: content.changes.length,
+      ms: Date.now() - startedAt,
+      model,
+      round: p.comments.length + 1,
+      // only a no-change answer shows the words, so "not supported" requests become visible; nothing else about the recipe is logged
+      ...(noChange ? { noChange: true, feedback: p.feedback.slice(0, MAX_LOGGED_TEXT), summary: String(content.summary || '').slice(0, MAX_LOGGED_TEXT) } : {}),
+    });
     const what = Object.keys(content.fields).length > 0 ? content.summary : `No change proposed. ${content.summary}`;
     await sendPush(env, { title: `Recept om te checken: ${p.recipeTitle}`.slice(0, 80), body: what.slice(0, 160), url: '/#/settings/review', tag: `proposal-${p.id}` }, { subject, log });
     return 'done';
   } catch (e) {
     const isBadOutput = !(e && typeof e === 'object' && 'status' in e); // model errors carry an HTTP status: the caller handles those
     if (!isBadOutput) throw e;
+    log('warn', { event: 'feedback_failed', proposalId: p.id, reason: (e instanceof Error ? e.message : String(e)).slice(0, 200), attempts: (p.attempts || 0) + 1 });
     p.attempts = (p.attempts || 0) + 1;
     if (p.attempts >= MAX_ATTEMPTS) {
       p.status = 'failed';
