@@ -11,6 +11,9 @@ on:
   # The factory's own PRs (label agent-built) are already reviewed by the build run.
   pull_request:
     types: [opened, reopened, ready_for_review]
+  # A check that fails after the review (e.g. a slow Cloudflare build) gets an agent PR reviewed again.
+  check_run:
+    types: [completed]
 
 permissions:
   contents: write
@@ -20,24 +23,34 @@ permissions:
   actions: read
 
 concurrency:
-  group: factory-${{ github.event.client_payload.identifier || github.event.pull_request.number }}
+  group: factory-${{ github.event.client_payload.identifier || github.event.pull_request.number || (github.event_name == 'check_run' && github.event.check_run.conclusion == 'failure' && github.event.check_run.pull_requests[0].number) || github.run_id }}
   cancel-in-progress: false
 
 jobs:
   build:
     if: github.event_name == 'repository_dispatch'
-    uses: kverburg/factory/.github/workflows/build.yml@main
+    uses: kmverburg/factory/.github/workflows/build.yml@main
     secrets: inherit
 
+  # A failed check on an open agent PR: cancels auto-merge, skips the factory's own checks and
+  # PRs that are already being fixed (see agents/review/recheck.sh).
+  recheck:
+    if: github.event_name == 'check_run' && github.event.check_run.conclusion == 'failure'
+    uses: kmverburg/factory/.github/workflows/recheck.yml@main
+    with:
+      check_name: ${{ github.event.check_run.name }}
+      head_sha: ${{ github.event.check_run.head_sha }}
+      pr_number: ${{ github.event.check_run.pull_requests[0].number && format('{0}', github.event.check_run.pull_requests[0].number) || '' }}
+
   review:
-    needs: build
+    needs: [build, recheck]
     if: >-
       always() &&
       ((github.event_name == 'pull_request' && !github.event.pull_request.draft &&
         !contains(github.event.pull_request.labels.*.name, 'agent-built')) ||
-       needs.build.outputs.pr_number != '')
-    uses: kverburg/factory/.github/workflows/review.yml@main
+       needs.build.outputs.pr_number != '' || needs.recheck.outputs.pr_number != '')
+    uses: kmverburg/factory/.github/workflows/review.yml@main
     with:
-      pr_number: ${{ needs.build.outputs.pr_number || github.event.pull_request.number }}
-      fix_round: ${{ github.event.client_payload.round || '0' }}
+      pr_number: ${{ needs.build.outputs.pr_number || needs.recheck.outputs.pr_number || github.event.pull_request.number }}
+      fix_round: ${{ github.event.client_payload.round || needs.recheck.outputs.fix_round || '0' }}
     secrets: inherit
