@@ -5,8 +5,10 @@ name: Factory
 on:
   repository_dispatch:
     # factory-build: sent by the relay when a Linear issue moves to "Agent Ready".
-    # factory-fix:   sent by the reviewer when it wants the builder to fix its PR.
-    types: [factory-build, factory-fix]
+    # factory-fix:   sent by the reviewer when it wants the builder to fix its PR, or by the relay when
+    #                Koen comments "change …" on the ticket (payload requested=true: not counted as a round).
+    # factory-approve: sent by the relay when Koen comments "approve" or "merge" on the ticket.
+    types: [factory-build, factory-fix, factory-approve]
   # PRs you open yourself get the same review (but are never changed automatically).
   # The factory's own PRs (label agent-built) are already reviewed by the build run.
   pull_request:
@@ -28,8 +30,17 @@ concurrency:
 
 jobs:
   build:
-    if: github.event_name == 'repository_dispatch'
+    if: github.event_name == 'repository_dispatch' && github.event.action != 'factory-approve'
     uses: kmverburg/factory/.github/workflows/build.yml@main
+    secrets: inherit
+
+  # Koen approved the PR from its Linear ticket: merge it once the required checks pass (agents/approve/approve.sh).
+  approve:
+    if: github.event_name == 'repository_dispatch' && github.event.action == 'factory-approve'
+    uses: kmverburg/factory/.github/workflows/approve.yml@main
+    with:
+      pr_number: ${{ github.event.client_payload.pr_number }}
+      identifier: ${{ github.event.client_payload.identifier }}
     secrets: inherit
 
   # A failed check on an open agent PR: cancels auto-merge, skips the factory's own checks and
