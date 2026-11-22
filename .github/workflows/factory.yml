@@ -5,14 +5,18 @@ name: Factory
 on:
   repository_dispatch:
     # factory-build: sent by the relay when a Linear issue moves to "Agent Ready".
-    # factory-fix:   sent by the reviewer when it wants the builder to fix its PR, or by the relay when
-    #                Koen comments "change …" on the ticket (payload requested=true: not counted as a round).
+    # factory-fix:   sent by the reviewer when it wants the builder to fix its PR, by the relay when
+    #                Koen comments "change …" on the ticket (payload requested=true: not counted as a round),
+    #                or by the update job to resolve merge conflicts (payload conflict=true: not counted either).
     # factory-approve: sent by the relay when Koen comments "approve" or "merge" on the ticket.
     types: [factory-build, factory-fix, factory-approve]
   # PRs you open yourself get the same review (but are never changed automatically).
   # The factory's own PRs (label agent-built) are already reviewed by the build run.
   pull_request:
     types: [opened, reopened, ready_for_review]
+  # The base branch moved: agent PRs are brought up to date, conflicts go to the builder (KV-49).
+  push:
+    branches: [main]
   # A check that fails after the review (e.g. a slow Cloudflare build) gets an agent PR reviewed again.
   check_run:
     types: [completed]
@@ -64,4 +68,17 @@ jobs:
     with:
       pr_number: ${{ needs.build.outputs.pr_number || needs.recheck.outputs.pr_number || github.event.pull_request.number }}
       fix_round: ${{ github.event.client_payload.round || needs.recheck.outputs.fix_round || '0' }}
+    secrets: inherit
+
+  # Keeps agent PRs up to date with main: after a push to main, and after a review (main may have moved while
+  # it ran, and an auto-merge must not merge an out-of-date PR). See agents/update/update.sh.
+  update:
+    needs: [build, recheck, review]
+    if: >-
+      always() && (github.event_name == 'push' ||
+        (needs.review.result == 'success' && (needs.build.outputs.pr_number != '' || needs.recheck.outputs.pr_number != '' || github.event_name == 'pull_request')))
+    uses: kmverburg/factory/.github/workflows/update.yml@main
+    with:
+      base_branch: ${{ github.event_name == 'push' && github.ref_name || '' }}
+      pr_number: ${{ github.event_name != 'push' && format('{0}', needs.build.outputs.pr_number || needs.recheck.outputs.pr_number || github.event.pull_request.number) || '' }}
     secrets: inherit
