@@ -7,9 +7,11 @@ on:
     # factory-build: sent by the relay when a Linear issue moves to "Agent Ready".
     # factory-fix:   sent by the reviewer when it wants the builder to fix its PR, by the relay when
     #                Koen comments "change …" on the ticket (payload requested=true: not counted as a round),
-    #                or by the update job to resolve merge conflicts (payload conflict=true: not counted either).
+    #                or by the update job to resolve merge conflicts (payload conflict=true: not counted either),
+    #                or by the stuck check to continue a ticket whose run died.
     # factory-approve: sent by the relay when Koen comments "approve" or "merge" on the ticket.
-    types: [factory-build, factory-fix, factory-approve]
+    # factory-review: sent by the stuck check (KV-73) for an agent PR whose review never gave a verdict.
+    types: [factory-build, factory-fix, factory-approve, factory-review]
   # PRs you open yourself get the same review (but are never changed automatically).
   # The factory's own PRs (label agent-built) are already reviewed by the build run.
   pull_request:
@@ -20,6 +22,9 @@ on:
   # A check that fails after the review (e.g. a slow Cloudflare build) gets an agent PR reviewed again.
   check_run:
     types: [completed]
+
+# Dispatch runs are named after their ticket, so the stuck check can tell which runs belong to which ticket.
+run-name: ${{ github.event.client_payload.identifier && format('Factory {0}', github.event.client_payload.identifier) || github.event.pull_request.title || 'Factory' }}
 
 permissions:
   contents: write
@@ -34,7 +39,7 @@ concurrency:
 
 jobs:
   build:
-    if: github.event_name == 'repository_dispatch' && github.event.action != 'factory-approve'
+    if: github.event_name == 'repository_dispatch' && github.event.action != 'factory-approve' && github.event.action != 'factory-review'
     uses: kmverburg/factory/.github/workflows/build.yml@main
     secrets: inherit
 
@@ -63,10 +68,11 @@ jobs:
       always() &&
       ((github.event_name == 'pull_request' && !github.event.pull_request.draft &&
         !contains(github.event.pull_request.labels.*.name, 'agent-built')) ||
-       needs.build.outputs.pr_number != '' || needs.recheck.outputs.pr_number != '')
+       needs.build.outputs.pr_number != '' || needs.recheck.outputs.pr_number != '' ||
+       github.event.action == 'factory-review')
     uses: kmverburg/factory/.github/workflows/review.yml@main
     with:
-      pr_number: ${{ needs.build.outputs.pr_number || needs.recheck.outputs.pr_number || github.event.pull_request.number }}
+      pr_number: ${{ needs.build.outputs.pr_number || needs.recheck.outputs.pr_number || github.event.client_payload.pr_number || github.event.pull_request.number }}
       fix_round: ${{ github.event.client_payload.round || needs.recheck.outputs.fix_round || '0' }}
     secrets: inherit
 
