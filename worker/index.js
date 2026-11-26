@@ -137,8 +137,11 @@ async function handleActivity(req, env) {
 
 // Structured logs: with [observability] enabled in wrangler.toml they land in Workers Logs
 // (dashboard > Workers & Pages > feast > Observability), where every field below is searchable.
+// Preview versions (APP_ENV = "preview" in wrangler.preview.toml) tag every line with env: 'preview',
+// so the log scout can ignore them. Production lines carry env: 'production'.
+let logEnv = 'production';
 const log = (level, fields) => {
-  const line = { app: 'feast', ...fields };
+  const line = { app: 'feast', env: logEnv, ...fields };
   if (level === 'error') console.error(line);
   else if (level === 'warn') console.warn(line);
   else console.log(line);
@@ -298,6 +301,7 @@ async function route(req, env, ctx) {
 
 export default {
   async fetch(req, env, ctx) {
+    logEnv = env.APP_ENV === 'preview' ? 'preview' : 'production';
     const url = new URL(req.url);
     const started = Date.now();
     try {
@@ -321,6 +325,7 @@ export default {
   },
   // Cron (every minute, production only): work on what the app reported as waiting, even with every device closed
   async scheduled(event, env, ctx) {
+    logEnv = env.APP_ENV === 'preview' ? 'preview' : 'production';
     ctx.waitUntil(
       processWork(env, { log }).then((result) => {
         if (!['idle', 'no_key', 'nothing_to_do', 'backing_off'].includes(result)) log('info', { event: 'cron_work', result });

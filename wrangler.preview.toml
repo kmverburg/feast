@@ -16,6 +16,8 @@ GEMINI_MODEL_LIGHT = "gemini-flash-lite-latest"
 GEMINI_BATCH = "on"
 # Previews have no cron: while the app is open, polling moves background work along instead
 PUMP_ON_POLL = "true"
+# Tags every log line with env = "preview" (the log scout ignores those)
+APP_ENV = "preview"
 
 [observability]
 enabled = true
