@@ -30,6 +30,10 @@ Feast is a personal recipe, meal-planning and shopping-list app (installable web
 4. First-run data comes from `INITIAL_RECIPES` in `src/services/storageService.ts`, so a fresh browser profile already has recipes to click on.
 5. Stop the servers you started.
 
+## Previews
+Every PR from this repo gets a preview: the `preview` job in `.github/workflows/deploy.yml` builds with `VITE_APP_ENV=preview` (a TEST badge shows) and uploads a separate Worker version with `wrangler.preview.toml` and the alias `pr-<number>`. It has its own KV namespace (never production data), no cron, and `APP_ENV=preview`, which tags every log line `env: "preview"` so the log scout ignores it. It sits behind Cloudflare Access like production, and uses the `*_API_KEY_TEST` secrets when set (see `GEMINI_KEYS.md`).
+To find a PR's preview URL: the workflow posts it as a PR comment starting with "**Test version:**" (marker `<!-- feast-preview -->`); it is also in the "Upload preview version" step log, and has the form `https://pr-<number>-feast.<account-subdomain>.workers.dev`.
+
 ## Conventions
 - UI components in `src/components/`, hooks in `src/hooks/`, storage, sync, AI and import logic in `src/services/`, types in `src/types/`, code shared with the worker in `src/shared/`.
 - Worker code lives in `worker/` (`index.js` routing, `gemini.js` and `providers.js` AI calls, `work.js` background work, `feedback.js`, `push.js`). It is plain JS with no build step; `worker/gemini.js` is also used by the Vite dev server.

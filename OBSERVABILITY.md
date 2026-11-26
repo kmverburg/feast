@@ -21,6 +21,8 @@ One line per step: `feedback_proposed` (the AI made a proposal: number of `chang
 Only when the AI proposes nothing (`noChange: true`) does `feedback_proposed` also carry the cook's `feedback` text and the AI's `summary`, each cut to 300 characters, so requests Feast can't do show up. No other recipe content is logged.
 Filter: `event = feedback_proposed AND noChange = true`.
 
+Every line also has `env`: `production`, or `preview` for PR preview versions (AI calls there use the same Gemini/Mistral setup but their logs are tagged, so ignore them with `env = production`).
+
 Handy filters: `event = client AND level = error`, `event = gemini_upstream AND status != 200`.
 Live view from a terminal: `npx wrangler tail feast --format json`.
 
