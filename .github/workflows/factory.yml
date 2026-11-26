@@ -13,7 +13,9 @@ on:
     # factory-review: sent by the stuck check (KV-73) for an agent PR whose review never gave a verdict.
     types: [factory-build, factory-fix, factory-approve, factory-review]
   # PRs you open yourself get the same review (but are never changed automatically).
-  # The factory's own PRs (label agent-built) are already reviewed by the build run.
+  # The factory's own PRs are already reviewed by the build run. They are recognised by their author (a bot: the
+  # factory app) and not only by the label agent-built, because `gh pr create --label` adds the label after the
+  # PR is opened, so the `opened` event doesn't carry it yet (KV-85).
   pull_request:
     types: [opened, reopened, ready_for_review]
   # The base branch moved: agent PRs are brought up to date, conflicts go to the builder (KV-49).
@@ -67,6 +69,7 @@ jobs:
     if: >-
       always() &&
       ((github.event_name == 'pull_request' && !github.event.pull_request.draft &&
+        github.event.pull_request.user.type != 'Bot' &&
         !contains(github.event.pull_request.labels.*.name, 'agent-built')) ||
        needs.build.outputs.pr_number != '' || needs.recheck.outputs.pr_number != '' ||
        github.event.action == 'factory-review')
